@@ -4,6 +4,7 @@ package binary
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"io"
 
@@ -80,10 +81,9 @@ func ReadUntilFromBufioReader(r *bufio.Reader, delim byte) ([]byte, error) {
 //
 // This is how the offset is saved in C:
 //
-//     dheader[pos] = ofs & 127;
-//     while (ofs >>= 7)
-//         dheader[--pos] = 128 | (--ofs & 127);
-//
+//	dheader[pos] = ofs & 127;
+//	while (ofs >>= 7)
+//	    dheader[--pos] = 128 | (--ofs & 127);
 func ReadVariableWidthInt(r io.Reader) (int64, error) {
 	var c byte
 	if err := Read(r, &c); err != nil {
@@ -154,27 +154,23 @@ const sniffLen = 8000
 // IsBinary detects if data is a binary value based on:
 // http://git.kernel.org/cgit/git/git.git/tree/xdiff-interface.c?id=HEAD#n198
 func IsBinary(r io.Reader) (bool, error) {
-	reader := bufio.NewReader(r)
-	c := 0
-	for {
-		if c == sniffLen {
-			break
-		}
-
-		b, err := reader.ReadByte()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return false, err
-		}
-
-		if b == byte(0) {
-			return true, nil
-		}
-
-		c++
+	buf := make([]byte, sniffLen)
+	n, err := io.ReadFull(r, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return false, err
 	}
 
-	return false, nil
+	// check null byte
+	if bytes.IndexByte(buf[:n], 0) != -1 {
+		return true, nil
+	}
+
+	nonText := 0
+	for _, b := range buf[:n] {
+		if b < 32 && b != 9 && b != 10 && b != 13 {
+			nonText++
+		}
+	}
+
+	return float64(nonText)/float64(n) > 0.3, nil
 }
