@@ -1,10 +1,11 @@
 module github.com/go-git/go-git/v5
 
 // go-git supports the last 3 stable Go versions.
-go 1.20
+go 1.23.2
 
 require (
 	dario.cat/mergo v1.0.0
+	github.com/0xd219b/go-difflib v1.0.2
 	github.com/ProtonMail/go-crypto v1.1.2
 	github.com/armon/go-socks5 v0.0.0-20160902184237-e75332964ef5
 	github.com/elazarl/goproxy v0.0.0-20240618083138-03be62527ccb

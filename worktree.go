@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/0xd219b/go-difflib/difflib"
 	"github.com/go-git/go-billy/v5"
 	"github.com/go-git/go-billy/v5/util"
 	"github.com/go-git/go-git/v5/config"
@@ -19,6 +20,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	"github.com/go-git/go-git/v5/utils/binary"
 	"github.com/go-git/go-git/v5/utils/ioutil"
 	"github.com/go-git/go-git/v5/utils/merkletrie"
 	"github.com/go-git/go-git/v5/utils/sync"
@@ -1192,4 +1194,130 @@ func (b *indexBuilder) Add(e *index.Entry) {
 
 func (b *indexBuilder) Remove(name string) {
 	delete(b.entries, filepath.ToSlash(name))
+}
+
+// DiffOptions 定义了 diff 操作的选项
+type DiffOptions struct {
+	// ShowNameOnly 设置为 true 时只显示文件名,不显示具体内容
+	ShowNameOnly bool
+	// DetectBinary 设置为 true 时会检测二进制文件
+	DetectBinary bool
+}
+
+func (w *Worktree) PrintDiff(opts *DiffOptions) error {
+	if opts == nil {
+		opts = &DiffOptions{
+			DetectBinary: true,
+		}
+	}
+
+	head, err := w.r.Head()
+	if err != nil && err != plumbing.ErrReferenceNotFound {
+		return fmt.Errorf("get HEAD: %w", err)
+	}
+
+	var tree *object.Tree
+	if err == nil {
+		commit, err := w.r.CommitObject(head.Hash())
+		if err != nil {
+			return fmt.Errorf("get commit: %w", err)
+		}
+
+		tree, err = commit.Tree()
+		if err != nil {
+			return fmt.Errorf("get tree: %w", err)
+		}
+	}
+
+	status, err := w.Status()
+	if err != nil {
+		return fmt.Errorf("get status: %w", err)
+	}
+
+	if status.IsClean() {
+		return nil
+	}
+
+	for path, fileStatus := range status {
+		if fileStatus.Worktree == Untracked {
+			continue
+		}
+
+		if fileStatus.Worktree == Deleted {
+			fmt.Printf("--- a/%s\n", path)
+			fmt.Printf("+++ b//dev/null\n")
+			continue
+		} else if fileStatus.Worktree == Added {
+			fmt.Printf("--- a//dev/null\n")
+			fmt.Printf("+++ b/%s\n", path)
+			continue
+		}
+
+		if opts.ShowNameOnly {
+			fmt.Printf("modified: %s\n", path)
+			continue
+		}
+
+		var newContent []byte
+		if fileStatus.Worktree != Deleted {
+			r, err := w.Filesystem.Open(path)
+			if err != nil {
+				continue
+			}
+
+			if opts.DetectBinary {
+				isBinary, err := binary.IsBinary(r)
+				if err != nil {
+					r.Close()
+					continue
+				}
+				if isBinary {
+					r.Close()
+					fmt.Printf("Binary files a/%s and b/%s differ\n", path, path)
+					continue
+				}
+			}
+
+			// 重新打开文件,因为 binary.IsBinary 会消耗掉读取位置
+			r, err = w.Filesystem.Open(path)
+			if err != nil {
+				continue
+			}
+
+			newContent, err = io.ReadAll(r)
+			r.Close()
+			if err != nil {
+				continue
+			}
+		}
+
+		var oldContent string
+		if tree != nil {
+			oldFile, err := tree.File(path)
+			if err == nil {
+				oldContent, err = oldFile.Contents()
+				if err != nil {
+					continue
+				}
+			}
+		}
+
+		diff := difflib.UnifiedDiff{
+			A:        difflib.SplitLines(oldContent),
+			B:        difflib.SplitLines(string(newContent)),
+			FromFile: "a/" + path,
+			ToFile:   "b/" + path,
+			Context:  3,
+		}
+
+		text, err := difflib.GetUnifiedDiffString(diff)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error generating diff for %s: %v\n", path, err)
+			continue
+		}
+
+		fmt.Print(text)
+	}
+
+	return nil
 }
