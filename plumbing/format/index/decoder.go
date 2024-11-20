@@ -223,12 +223,17 @@ func (d *Decoder) readExtensions(idx *Index) error {
 	for {
 		expected = d.hash.Sum(nil)
 		peeked, err = d.buf.Peek(peekLen)
+		if err != nil && err != io.EOF {
+			return err
+		}
+
+		if err == io.EOF {
+			return nil
+		}
+
 		if len(peeked) < peekLen {
 			// there can't be an extension at this point, so let's bail out
 			break
-		}
-		if err != nil {
-			return err
 		}
 
 		err = d.readExtension(idx)
